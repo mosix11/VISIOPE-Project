@@ -211,7 +211,7 @@ class Council_Trainer(nn.Module):
 
         return x_ab_s
 
-    def gen_update(self, x_a, x_b, hyperparameters, iterations=0):
+    def gen_update(self, x_a, x_b, hyperparameters, attr_a=None, attr_b=None, iterations=0):
         self.hyperparameters = hyperparameters
         for gen_opt in self.gen_opt_s:
             gen_opt.zero_grad()
@@ -388,7 +388,7 @@ class Council_Trainer(nn.Module):
                 return x_a_s, x_ab1_mask, x_ab1, x_ab2, None, None, None, None
 
 
-    def dis_update(self, x_a=None, x_b=None, hyperparameters=None):
+    def dis_update(self, x_a=None, x_b=None, attr_a=None, attr_b=None, hyperparameters=None):
         x_a_dis = x_a if not hyperparameters['dis']['do_Dis_only_gray'] else torch.sum(x_a.detach(), 1).unsqueeze(1).repeat(1, hyperparameters['input_dim_a'], 1, 1) / hyperparameters['input_dim_a']
         x_b_dis = x_b if not hyperparameters['dis']['do_Dis_only_gray'] else torch.sum(x_b.detach(), 1).unsqueeze(1).repeat(1, hyperparameters['input_dim_b'], 1, 1) / hyperparameters['input_dim_b']
         for dis_opt in self.dis_opt_s:
@@ -426,7 +426,7 @@ class Council_Trainer(nn.Module):
             self.loss_dis_total_s[i].backward()
             self.dis_opt_s[i].step()
 
-    def dis_council_update(self, x_a=None, x_b=None, hyperparameters=None):
+    def dis_council_update(self, x_a=None, x_b=None, attr_a=None, attr_b=None, hyperparameters=None):
 
         if self.council_size <= 1 or hyperparameters['council']['numberOfCouncil_dis_relative_iteration'] == 0:
             print('no council discriminetor is needed (council size <= 1 or numberOfCouncil_dis_relative_iteration == 0)')

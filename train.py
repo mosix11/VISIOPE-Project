@@ -149,7 +149,6 @@ try:
             attrs_a, attrs_b = images_a[1].cuda(config['cuda_device']).detach(), images_b[1].cuda(config['cuda_device']).detach()
             images_a, images_b = images_a[0].cuda(config['cuda_device']).detach(), images_b[0].cuda(config['cuda_device']).detach()
 
-
             print("Iteration: " + str(iterations + 1) + "/" + str(max_iter) + " Elapsed time " + str(time.time()-t)[:5])
             t = time.time()
 
@@ -169,12 +168,12 @@ try:
             #     trainer.dis_update(images_a, images_b, config)
             #     dis_iter = 1
             
-            trainer.dis_update(images_a, images_b, config)
+            trainer.dis_update(images_a, images_b, attrs_a, attrs_b, config)
 
             if config['council']['numberOfCouncil_dis_relative_iteration'] > 0:
-                trainer.dis_council_update(images_a, images_b, config)  # the multiple iterating happens inside dis_council_update
+                trainer.dis_council_update(images_a, images_b, attrs_a, attrs_b, config)  # the multiple iterating happens inside dis_council_update
 
-            trainer.gen_update(images_a, images_b, config, iterations)
+            trainer.gen_update(images_a, images_b, config, attrs_a, attrs_b, iterations)
             torch.cuda.synchronize(device=config['cuda_device'])
             iterations += 1
 
@@ -194,14 +193,14 @@ try:
 
 
                 if config['do_a2b']:
-                    tmp_images_a = test_loader_a[0].dataset[0].cuda(config['cuda_device']).unsqueeze(0)
+                    tmp_images_a = test_loader_a[0].dataset[0][0].cuda(config['cuda_device']).unsqueeze(0)
 
                 ind_a2b = 0
                 ind_b2a = 0
                 for k in tqdm(range(1, config['misc']['test_Fid_num_of_im']), desc='Creating images for tests'):
                     c_ind = np.random.randint(config['council']['council_size'])
                     if config['do_a2b']:
-                        tmp_images_a = test_loader_a[0].dataset[k].cuda(config['cuda_device']).unsqueeze(0)
+                        tmp_images_a = test_loader_a[0].dataset[k][0].cuda(config['cuda_device']).unsqueeze(0)
 
                         styles = torch.randn(tmp_images_a.shape[0], config['gen']['style_dim'], 1, 1).cuda(config['cuda_device'])
                         tmp_res_imges_a2b = trainer.sample(x_a=tmp_images_a, x_b=None, s_a=styles, s_b=styles)
@@ -273,6 +272,7 @@ try:
                     input("Clear space and press enter to retry ....")
                     print("retrying to save...")
                     trainer.save(checkpoint_directory, iterations)
+            
             trainer.update_learning_rate()
 
 except Exception as e:
