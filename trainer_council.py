@@ -16,6 +16,10 @@ from collections import deque
 import numpy as np
 import torchvision.transforms.functional as TF
 from scipy import ndimage
+from attribute_discriminant.model import BitmojiGenderClassifier
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 class Council_Trainer(nn.Module):
     def __init__(self, hyperparameters, cuda_device='cuda:0'):
@@ -56,12 +60,14 @@ class Council_Trainer(nn.Module):
         if self.do_a2b_conf:
             self.los_hist_gan_a2b_s = []
             self.los_hist_council_a2b_s = []
+            self.los_hist_ac_gan_a2b_s = []
 
 
         for ind in range(self.council_size):
             if self.do_a2b_conf:
                 self.los_hist_gan_a2b_s.append(deque(np.ones(self.los_matching_hist_size_conf)))
                 self.los_hist_council_a2b_s.append(deque(np.ones(self.los_matching_hist_size_conf)))
+                self.los_hist_ac_gan_a2b_s.append(deque(np.ones(self.los_matching_hist_size_conf)))
 
 
         self.do_council_loss = None
@@ -80,7 +86,19 @@ class Council_Trainer(nn.Module):
                     self.dis_council_a2b_s.append(
                         MsImageDisCouncil(hyperparameters['input_dim_a'],
                                           hyperparameters['dis'], cuda_device=self.cuda_device))  # council discriminator for domain a2b
-
+        
+        
+        # define gender classifier
+        b_gender_discriminant = BitmojiGenderClassifier().to(device)
+        b_gender_discriminant.load_state_dict(torch.load(hyperparameters['bitmoji_classifier_model_weights_path']))
+        for name, para in b_gender_discriminant.named_parameters():
+            para.requires_grad = False
+        self.b_gender_discriminant = b_gender_discriminant.eval()
+        self.CE_loss = nn.CrossEntropyLoss()
+        
+        self.bring_ac_iter = 31000
+        
+            
 
         self.instancenorm = nn.InstanceNorm2d(512, affine=False)
         self.style_dim = hyperparameters['gen']['style_dim']
@@ -194,6 +212,7 @@ class Council_Trainer(nn.Module):
         return (torch.sum(torch.abs(mask[:, :, 1:, :]-mask[:, :, :-1, :])) + \
                torch.sum(torch.abs(mask[:, :, :, 1:] - mask[:, :, :, :-1]))) / mask.numel()
 
+
     def forward(self, x_a, s_t=None, x_b=None, s_a=None, s_b=None):
         self.eval()
         if s_t is not None:
@@ -205,7 +224,7 @@ class Council_Trainer(nn.Module):
             x_ab_s = []
         for i in range(self.council_size):
             if self.do_a2b_conf:
-                c_a, s_a_fake = self.gen_a2b.encode(x_a)
+                c_a, s_a_fake = self.gen_a2b.encode(x_a) # TODO what the dog doin?!!
                 x_ab_s.append(self.gen_a2b.decode(c_a, s_b, x_a))
 
 
@@ -218,19 +237,19 @@ class Council_Trainer(nn.Module):
         s_a = Variable(torch.randn(x_a.size(0), self.style_dim, 1, 1).cuda(self.cuda_device))
         s_b = Variable(torch.randn(x_b.size(0), self.style_dim, 1, 1).cuda(self.cuda_device))
         c_a_s = []
-        s_a_prime_s = []
+
         x_ab_s = []
 
         self.loss_gen_adv_a2b_s = []
+        self.loss_gender_disc_loss_a2b_s = []
         self.loss_gen_total_s = []
         self.council_w_conf = hyperparameters['council_w'] if hyperparameters['iteration'] > hyperparameters['council']['council_start_at_iter'] else 0
-
         for i in range(self.council_size):
             # encode
             if self.do_a2b_conf:
-                c_a, s_a_prime = self.gen_a2b_s[i].encode(x_a)
+                c_a, s_a_prime = self.gen_a2b_s[i].encode(x_a, attr_a, hyperparameters['iteration'])
                 c_a_s.append(c_a)
-                s_a_prime_s.append(s_a_prime)
+
 
             # decode (cross domain)
             if self.do_a2b_conf:
@@ -243,28 +262,40 @@ class Council_Trainer(nn.Module):
             # GAN loss
             if hyperparameters['gan_w'] != 0:
                 i_dis = i
-                if hyperparameters['gen']['useRandomDis']:
-                    i_dis = np.random.randint(self.council_size)
 
                 if hyperparameters['do_a2b']:
-                    x_ab_s_curr = x_ab_s[i] if not hyperparameters['dis']['do_Dis_only_gray'] else torch.sum(x_ab_s[i], 1).unsqueeze(1).repeat(1, hyperparameters['input_dim_b'], 1, 1) / hyperparameters['input_dim_b']
+                    x_ab_s_curr = x_ab_s[i]
                     loss_gen_adv_a2b = self.dis_a2b_s[i_dis].calc_gen_loss(x_ab_s_curr)
+                    
+                    # if hyperparameters['iteration'] > self.bring_ac_iter:
+                    #     preds = self.b_gender_discriminant(x_ab_s_curr)
+                    #     loss_gender_disc_loss_a2b = self.CE_loss(preds, attr_a)
+                    # else:
+                    #     loss_gender_disc_loss_a2b = 0
+
                 else:
                     loss_gen_adv_a2b = 0
-
+                
 
 
                 self.loss_gen_adv_a2b_s.append(loss_gen_adv_a2b)
+                
+                # self.loss_gender_disc_loss_a2b_s.append(loss_gender_disc_loss_a2b)
 
 
                 if self.do_w_loss_matching:
                     if hyperparameters['do_a2b']:
                         self.los_hist_gan_a2b_s[i].append(loss_gen_adv_a2b.detach().cpu().numpy())
                         self.los_hist_gan_a2b_s[i].popleft()
+                        # if hyperparameters['iteration'] > self.bring_ac_iter:
+                        #     self.los_hist_ac_gan_a2b_s[i].append(loss_gender_disc_loss_a2b.detach().cpu().numpy())
+                        #     self.los_hist_ac_gan_a2b_s[i].popleft()
 
 
                 if hyperparameters['do_a2b']:
                     self.loss_gen_total_s[i] += hyperparameters['gan_w'] * self.loss_gen_adv_a2b_s[i].cuda(self.cuda_device)
+                    # if hyperparameters['iteration'] > self.bring_ac_iter:
+                    #     self.loss_gen_total_s[i] += hyperparameters['ac_gan_w'] * self.loss_gender_disc_loss_a2b_s[i].cuda(self.cuda_device)
 
 
 
@@ -329,7 +360,7 @@ class Council_Trainer(nn.Module):
             self.gen_opt_s[i].step()
 
 
-    def sample(self, x_a=None, x_b=None, s_a=None, s_b=None, council_member_to_sample_vec=None, return_mask=True):
+    def sample(self, x_a=None, x_b=None, attrs_a=None, attrs_b=None, s_a=None, s_b=None, council_member_to_sample_vec=None, return_mask=True, iteration=0):
         self.eval()
         if self.do_a2b_conf:
             x_a_s = []
@@ -345,7 +376,11 @@ class Council_Trainer(nn.Module):
             for j in council_member_to_sample_vec:
                 if self.do_a2b_conf:
                     x_a_s.append(x_a[i].unsqueeze(0))
-                    c_a, s_a_fake = self.gen_a2b_s[j].encode(x_a[i].unsqueeze(0))
+                    # print(x_a[i].unsqueeze(0).shape)
+                    # print(attrs_a)
+                    # print(attrs_a[i])
+
+                    c_a, s_a_fake = self.gen_a2b_s[j].encode(x_a[i].unsqueeze(0), torch.tensor([attrs_a[i]], dtype=torch.int).cuda(self.cuda_device), iteration) ## TODO attention
                     if not return_mask:
                         x_a_recon.append(self.gen_a2b_s[j].decode(c_a, s_a_fake, x_a[i].unsqueeze(0)))
                         x_ab1.append(self.gen_a2b_s[j].decode(c_a, s_b1[i].unsqueeze(0), x_a[i].unsqueeze(0)))
@@ -389,8 +424,9 @@ class Council_Trainer(nn.Module):
 
 
     def dis_update(self, x_a=None, x_b=None, attr_a=None, attr_b=None, hyperparameters=None):
-        x_a_dis = x_a if not hyperparameters['dis']['do_Dis_only_gray'] else torch.sum(x_a.detach(), 1).unsqueeze(1).repeat(1, hyperparameters['input_dim_a'], 1, 1) / hyperparameters['input_dim_a']
-        x_b_dis = x_b if not hyperparameters['dis']['do_Dis_only_gray'] else torch.sum(x_b.detach(), 1).unsqueeze(1).repeat(1, hyperparameters['input_dim_b'], 1, 1) / hyperparameters['input_dim_b']
+
+        x_a_dis = x_a
+        x_b_dis = x_b 
         for dis_opt in self.dis_opt_s:
             dis_opt.zero_grad()
         if self.do_a2b_conf:
@@ -404,7 +440,7 @@ class Council_Trainer(nn.Module):
 
             # encode
             if hyperparameters['do_a2b']:
-                c_a, _ = self.gen_a2b_s[i_gen].encode(x_a)
+                c_a, _ = self.gen_a2b_s[i_gen].encode(x_a, attr_a, hyperparameters['iteration'])
 
 
             # decode (cross domain)
@@ -427,6 +463,7 @@ class Council_Trainer(nn.Module):
             self.dis_opt_s[i].step()
 
     def dis_council_update(self, x_a=None, x_b=None, attr_a=None, attr_b=None, hyperparameters=None):
+
 
         if self.council_size <= 1 or hyperparameters['council']['numberOfCouncil_dis_relative_iteration'] == 0:
             print('no council discriminetor is needed (council size <= 1 or numberOfCouncil_dis_relative_iteration == 0)')
@@ -466,7 +503,7 @@ class Council_Trainer(nn.Module):
         for i in range(self.council_size):
             # encode
             if hyperparameters['do_a2b']:
-                c_a, _ = self.gen_a2b_s[i].encode(x_a)
+                c_a, _ = self.gen_a2b_s[i].encode(x_a, attr_a, hyperparameters['iteration'])
                 c_a_s.append(c_a)
 
 

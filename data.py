@@ -94,10 +94,11 @@ def make_dataset_with_attrs(dir, attr_dir):
     images = []
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
     attrs = np.load(attr_dir) 
-    attrs[attrs == -1] = 0 ## one-hot encoding had not been tested
-    b = np.zeros((attrs.size, attrs.max() + 1))
-    b[np.arange(attrs.size), attrs] = 1
-    attrs = b
+    # attrs[attrs == -1] = 0 ## one-hot encoding had not been tested
+    # b = np.zeros((attrs.size, attrs.max() + 1))
+    # b[np.arange(attrs.size), attrs] = 1
+    # attrs = b.astype(int)
+    attrs[attrs==-1] = 0
     for root, _, fnames in sorted(os.walk(dir)):
         for fname in fnames:
             if is_image_file(fname):

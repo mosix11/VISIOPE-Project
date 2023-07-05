@@ -10,6 +10,7 @@ try:
     from itertools import izip as zip
 except ImportError: # will be 3.x series
     pass
+from torchvision.utils import save_image
 
 ##################################################################################
 # Discriminator
@@ -33,6 +34,8 @@ class MsImageDis(nn.Module):
         self.cnns = nn.ModuleList()
         for _ in range(self.num_scales):
             self.cnns.append(self._make_net().cuda(self.cuda_device))
+
+
 
     def _make_net(self):
         dim = self.dim
@@ -67,16 +70,6 @@ class MsImageDis(nn.Module):
                 all1 = Variable(torch.ones_like(out1.data).cuda(self.cuda_device), requires_grad=False)
                 loss += torch.mean(F.binary_cross_entropy(F.sigmoid(out0), all0) +
                                    F.binary_cross_entropy(F.sigmoid(out1), all1))
-            elif self.gan_type == 'RelativisticAverageHingeGAN':
-                self.prev_real_input = input_real  # save it for the gen train later
-                # difference between real and fake:
-                r_f_diff = out1 - torch.mean(out0, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                # difference between fake and real samples
-                f_r_diff = out0 - torch.mean(out1, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                # return the loss
-                loss += (torch.mean(torch.nn.ReLU()(1 - r_f_diff))
-                         + torch.mean(torch.nn.ReLU()(1 + f_r_diff)))
-
             else:
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
         return loss
@@ -91,19 +84,6 @@ class MsImageDis(nn.Module):
             elif self.gan_type == 'nsgan':
                 all1 = Variable(torch.ones_like(out0.data).cuda(self.cuda_device), requires_grad=False)
                 loss += torch.mean(F.binary_cross_entropy(F.sigmoid(out0), all1))
-            elif self.gan_type == 'RelativisticAverageHingeGAN':
-                if input_real is not None:
-                    outs1 = self.forward(input_real)
-                elif self.prev_real_input is not None:
-                    outs1 = self.forward(self.prev_real_input)
-                else:
-                    assert 0, "try using cal_gan_loss with RelativisticAverageHingeGAN but did not provid input_real"
-                out1 = outs1[it]
-                # difference between real and fake:
-                r_f_diff = out1 - torch.mean(out0, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                # difference between fake and real samples
-                f_r_diff = out0 - torch.mean(out1, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                loss = torch.mean(torch.nn.ReLU()(1 + r_f_diff)) + torch.mean(torch.nn.ReLU()(1 - f_r_diff))
 
             else:
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
@@ -170,17 +150,6 @@ class MsImageDisCouncil(nn.Module):
                 loss += torch.mean(F.binary_cross_entropy(F.sigmoid(out0), all0) +
                                    F.binary_cross_entropy(F.sigmoid(out1), all1))
 
-            elif self.gan_type == 'RelativisticAverageHingeGAN':
-                self.prev_real_input = input_real  # save it for the gen train later
-                self.prev_input = input  # save it for the gen train later
-                # difference between real and fake:
-                r_f_diff = out1 - torch.mean(out0, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                # difference between fake and real samples
-                f_r_diff = out0 - torch.mean(out1, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                loss = torch.mean(torch.nn.ReLU()(1 + r_f_diff)) + torch.mean(torch.nn.ReLU()(1 - f_r_diff))
-                # return the loss
-                loss += (torch.mean(torch.nn.ReLU()(1 - r_f_diff))
-                         + torch.mean(torch.nn.ReLU()(1 + f_r_diff)))
             else:
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
         return loss
@@ -195,21 +164,6 @@ class MsImageDisCouncil(nn.Module):
             elif self.gan_type == 'nsgan':
                 all1 = Variable(torch.ones_like(out0.data).cuda(self.cuda_device), requires_grad=False)
                 loss += torch.mean(F.binary_cross_entropy(F.sigmoid(out0), all1))
-            elif self.gan_type == 'RelativisticAverageHingeGAN':
-                if input_real is not None:
-                    outs1 = self.forward(input_real)
-                elif self.prev_real_input is not None:
-                    outs1 = self.forward(self.prev_real_input, self.prev_input)
-                else:
-                    assert 0, "try using cal_gan_loss with RelativisticAverageHingeGAN but did not provid input_real"
-
-                out1 = outs1[it]
-                # difference between real and fake:
-                r_f_diff = out1 - torch.mean(out0, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                # difference between fake and real samples
-                f_r_diff = out0 - torch.mean(out1, dim=0, keepdim=True).repeat(10, 1, 1, 1)
-                loss = torch.mean(torch.nn.ReLU()(1 + r_f_diff)) + torch.mean(torch.nn.ReLU()(1 - f_r_diff))
-                loss = torch.mean(torch.nn.ReLU()(1 + r_f_diff)) + torch.mean(torch.nn.ReLU()(1 - f_r_diff))
             else:
                 assert 0, "Unsupported GAN type: {}".format(self.gan_type)
         return loss
@@ -226,6 +180,7 @@ class AdaINGen(nn.Module):
         super(AdaINGen, self).__init__()
         dim = params['dim']
         style_dim = params['style_dim']
+        attr_dim = params['attr_dim']
         self.n_downsample = params['n_downsample']
         n_res = params['n_res']
         self.activ = params['activ']
@@ -233,60 +188,48 @@ class AdaINGen(nn.Module):
         mlp_dim = params['mlp_dim']
         self.do_my_style = params['do_my_style']
         self.cuda_device = cuda_device
+        
+
 
         # style encoder
         self.enc_style = StyleEncoder(4, input_dim, dim, style_dim, norm='none', activ=self.activ, pad_type=pad_type).cuda(self.cuda_device)
 
         # content encoder
-        self.enc_content = ContentEncoder(self.n_downsample, n_res, input_dim, dim, 'in', self.activ, pad_type=pad_type).cuda(self.cuda_device)
+        self.enc_content = ContentEncoder(self.n_downsample, n_res, input_dim, attr_dim, dim, 'in', self.activ, pad_type=pad_type).cuda(self.cuda_device)
 
-        if self.do_my_style:
-            self.dec = Decoder_V2_atten(n_upsample=self.n_downsample, n_res=n_res, dim=self.enc_content.output_dim + style_dim, output_dim=input_dim, res_norm='in', activ=self.activ, pad_type=pad_type, num_of_mask_dim_to_add=params['num_of_mask_dim_to_add']).cuda(self.cuda_device)
-        else:
-            self.dec = Decoder_V2_atten(self.n_downsample, n_res, self.enc_content.output_dim, input_dim, res_norm='adain', activ=self.activ, pad_type=pad_type, num_of_mask_dim_to_add=params['num_of_mask_dim_to_add']).cuda(self.cuda_device)
+
+        self.dec = Decoder_V2_atten(self.n_downsample, n_res, self.enc_content.output_dim, input_dim, res_norm='adain', activ=self.activ, pad_type=pad_type, num_of_mask_dim_to_add=params['num_of_mask_dim_to_add']).cuda(self.cuda_device)
 
         # MLP to generate AdaIN parameters or adding sytle my way
-        if self.do_my_style:
-            self.mlp = MLP(input_dim=style_dim, output_dim=style_dim, dim=mlp_dim, n_blk=3, norm='none',
-                           activ=self.activ).cuda(self.cuda_device)
-        else:
-            self.mlp = MLP(input_dim=style_dim, output_dim=self.get_num_adain_params(self.dec), dim=mlp_dim, n_blk=3,
-                           norm='none', activ=self.activ).cuda(self.cuda_device)
 
-    def forward(self, images, return_mask=False):
+        self.mlp = MLP(input_dim=style_dim, output_dim=self.get_num_adain_params(self.dec), dim=mlp_dim, n_blk=3,
+                        norm='none', activ=self.activ).cuda(self.cuda_device)
+
+
+    
+    def forward(self, images, attrs, return_mask=False):
         # reconstruct an image
         images = images.cuda(self.cuda_device)
-        content, style_fake = self.encode(images)
+        attrs = attrs.cuda(self.cuda_device)
+        
+        content, style_fake = self.encode(images, attrs)
 
         images_recon = self.decode(content=content, style=style_fake, images=images, return_mask=return_mask)
         return images_recon
 
-    def forward(self, images, style, return_mask=False):
-        # reconstruct an image
-        content, _ = self.encode(images)
-
-        images_recon = self.decode(content=content, style=style, images=images, return_mask=return_mask)
-        return images_recon
-
-
-    def encode(self, images):
+    
+    def encode(self, images, attrs, iteration):
         images = images.cuda(self.cuda_device)
         # encode an image to its content and style codes
         style_fake = self.enc_style(images)
-        content = self.enc_content(images)
+        content = self.enc_content(images, attrs, iteration)
         return content, style_fake
 
     def decode(self, content, style, images, return_mask=False):
         content, style, images = content.cuda(self.cuda_device), style.cuda(self.cuda_device), images.cuda(self.cuda_device)
         # decode content and style codes to an image
-        if self.do_my_style:
-            style_to_add = self.mlp(style)
-            style_to_add = style_to_add.repeat(content.shape[2], content.shape[3], 1, 1)
-            style_to_add = style_to_add.transpose(0, 2).transpose(3, 1)
-            content = torch.cat((content, style_to_add), 1)
-        else:
-            adain_params = self.mlp(style)
-            self.assign_adain_params(adain_params, self.dec)
+        adain_params = self.mlp(style)
+        self.assign_adain_params(adain_params, self.dec)
         if return_mask:
             images, mask = self.dec(content, images, return_mask)
             return images, mask
@@ -341,28 +284,80 @@ class StyleEncoder(nn.Module):
         self.model += [nn.AdaptiveAvgPool2d(1)] # global average pooling
         self.model += [nn.Conv2d(dim, style_dim, 1, 1, 0)]
         self.model = nn.Sequential(*self.model)
-        self.output_dim = dim
+        self.output_dim = dim + 1
 
     def forward(self, x):
+
         return self.model(x)
+
+# class ContentEncoder(nn.Module):
+#     def __init__(self, n_downsample, n_res, input_dim, dim, norm, activ, pad_type):
+#         super(ContentEncoder, self).__init__()
+#         self.model = []
+#         self.model += [Conv2dBlock(input_dim, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type)] # ORIGINAL
+#         for i in range(n_downsample):
+#             self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
+#             dim *= 2
+#         # residual blocks
+#         self.model += [ResBlocks(n_res, dim, norm=norm, activation=activ, pad_type=pad_type)]
+#         self.model = nn.Sequential(*self.model)
+#         self.output_dim = dim
+
+#     def forward(self, x):
+#         return self.model(x)
+
+
 
 class ContentEncoder(nn.Module):
-    def __init__(self, n_downsample, n_res, input_dim, dim, norm, activ, pad_type):
+    def __init__(self, n_downsample, n_res, input_dim, attr_dim, dim, norm, activ, pad_type):
         super(ContentEncoder, self).__init__()
-        self.model = []
-        self.model += [Conv2dBlock(input_dim, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type)] # ORIGINAL
+        # self.init_conv_block = Conv2dBlock(input_dim + 1, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type) # plus 1 due to embedding feature map
+        self.init_conv_block = Conv2dBlock(input_dim, dim, 7, 1, 3, norm=norm, activation=activ, pad_type=pad_type) 
+
+        self.downsample_blocks = nn.ModuleList()
         for i in range(n_downsample):
-            self.model += [Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type)]
+            self.downsample_blocks.append(Conv2dBlock(dim, 2 * dim, 4, 2, 1, norm=norm, activation=activ, pad_type=pad_type))
             dim *= 2
-        # residual blocks
-        self.model += [ResBlocks(n_res, dim, norm=norm, activation=activ, pad_type=pad_type)]
-        self.model = nn.Sequential(*self.model)
+        
+        self.size_matcher_block  = Conv2dBlock(dim + 1, dim, 3, 1, 1, norm=norm, activation=activ, pad_type=pad_type) 
+        self.res_blocks = ResBlocks(n_res, dim, norm=norm, activation=activ, pad_type=pad_type)
         self.output_dim = dim
+        self.embedding = nn.Embedding(attr_dim, 20)
+        self.fc = LinearBlock(20, 32*32)
+        self.bring_ac_iter = 31000
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, attr, iteration):
+        # self.i += 1
+        # img1 = x[0].cpu()
+        # img2 = x[1].cpu()
+        # img3 = x[2].cpu()
+        # print(attr)
+        # save_image(img1, './tempfiles/img1.png')
+        # save_image(img2, './tempfiles/img2.png')
+        # save_image(img3, './tempfiles/img3.png')
+        # if self.i == 10:
+        #     exit()
 
 
+        # attr = attr.view(attr.size(0), 1, 128, 128)
+        # x = torch.cat((x, attr), dim=1)
+
+
+        x = self.init_conv_block(x)
+        for downsample_block in self.downsample_blocks:
+            x = downsample_block(x)
+        
+        # if iteration > self.bring_ac_iter:
+
+        #     attr = self.embedding(attr)
+        #     attr = self.fc(attr)
+        #     attr = attr.view(attr.size(0), 1, 32, 32)
+        #     x = torch.cat((x, attr), dim=1)
+        #     x = self.size_matcher_block(x)
+        
+        x = self.res_blocks(x)
+
+        return x
 
 
 class Decoder_V2_atten(nn.Module):
@@ -418,6 +413,7 @@ class ResBlocks(nn.Module):
         self.model = []
         for i in range(num_blocks):
             self.model += [ResBlock(dim, norm=norm, activation=activation, pad_type=pad_type)]
+            
         self.model = nn.Sequential(*self.model)
 
     def forward(self, x):
@@ -442,7 +438,6 @@ class MLP(nn.Module):
 class ResBlock(nn.Module):
     def __init__(self, dim, norm='in', activation='relu', pad_type='zero'):
         super(ResBlock, self).__init__()
-
         model = []
         model += [Conv2dBlock(dim ,dim, 3, 1, 1, norm=norm, activation=activation, pad_type=pad_type)]
         model += [Conv2dBlock(dim ,dim, 3, 1, 1, norm=norm, activation='none', pad_type=pad_type)]

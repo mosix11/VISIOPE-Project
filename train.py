@@ -64,25 +64,37 @@ seed_torch(config['random_seed'])
 # Setup model and data loader
 train_loader_a, train_loader_b, test_loader_a, test_loader_b = get_all_data_loaders(config)
 
+train_display_a_samples_idx = [np.random.randint(train_loader_a[0].__len__()) for _ in range(display_size)]
+train_display_b_samples_idx = [np.random.randint(train_loader_b[0].__len__()) for _ in range(display_size)]
+test_display_a_samples_idx = [np.random.randint(test_loader_a[0].__len__()) for _ in range(display_size)]
+test_display_b_samples_idx = [np.random.randint(test_loader_b[0].__len__()) for _ in range(display_size)]
 
 
 try:
-    train_display_images_a = torch.stack([train_loader_a[0].dataset[np.random.randint(train_loader_a[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    train_display_images_a = torch.stack([train_loader_a[0].dataset[i][0] for i in train_display_a_samples_idx]).cuda(config['cuda_device'])
+    train_display_attrs_a = torch.tensor([train_loader_a[0].dataset[i][1] for i in train_display_a_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 except:
-    train_display_images_a = torch.stack([train_loader_a[0].dataset[np.random.randint(train_loader_a[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    train_display_images_a = torch.stack([train_loader_a[0].dataset[i][0] for i in train_display_a_samples_idx]).cuda(config['cuda_device'])
+    train_display_attrs_a = torch.tensor([train_loader_a[0].dataset[i][1] for i in train_display_a_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 try:
-    train_display_images_b = torch.stack([train_loader_b[0].dataset[np.random.randint(train_loader_b[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    train_display_images_b = torch.stack([train_loader_b[0].dataset[i][0] for i in train_display_b_samples_idx]).cuda(config['cuda_device'])
+    train_display_attrs_b = torch.tensor([train_loader_b[0].dataset[i][1] for i in train_display_b_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
+    
 except:
-    train_display_images_b = torch.stack([train_loader_b[0].dataset[np.random.randint(train_loader_b[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    train_display_images_b = torch.stack([train_loader_b[0].dataset[i][0] for i in train_display_b_samples_idx]).cuda(config['cuda_device'])
+    train_display_attrs_b = torch.tensor([train_loader_b[0].dataset[i][1] for i in train_display_b_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 try:
-    test_display_images_a = torch.stack([test_loader_a[0].dataset[np.random.randint(test_loader_a[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    test_display_images_a = torch.stack([test_loader_a[0].dataset[i][0] for i in test_display_a_samples_idx]).cuda(config['cuda_device'])
+    test_display_attrs_a = torch.tensor([test_loader_a[0].dataset[i][1] for i in test_display_a_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 except:
     # test_display_images_a = torch.stack([test_loader_a[0].dataset[np.random.randint(test_loader_a[0].__len__())] for _ in range(display_size)]).cuda()
     test_display_images_a = None
 try:
-    test_display_images_b = torch.stack([test_loader_b[0].dataset[np.random.randint(test_loader_b[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    test_display_images_b = torch.stack([test_loader_b[0].dataset[i][0] for i in test_display_b_samples_idx]).cuda(config['cuda_device'])
+    test_display_attrs_b = torch.tensor([test_loader_b[0].dataset[i][1] for i in test_display_b_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 except:
-    test_display_images_b = torch.stack([test_loader_b[0].dataset[np.random.randint(test_loader_b[0].__len__())][0] for _ in range(display_size)]).cuda(config['cuda_device'])
+    test_display_images_b = torch.stack([test_loader_b[0].dataset[i][0] for i in test_display_b_samples_idx]).cuda(config['cuda_device'])
+    test_display_attrs_b = torch.tensor([test_loader_b[0].dataset[i][1] for i in test_display_b_samples_idx], dtype=torch.int).cuda(config['cuda_device'])
 
 trainer = Council_Trainer(config, config['cuda_device'])
 
@@ -201,9 +213,11 @@ try:
                     c_ind = np.random.randint(config['council']['council_size'])
                     if config['do_a2b']:
                         tmp_images_a = test_loader_a[0].dataset[k][0].cuda(config['cuda_device']).unsqueeze(0)
-
+                        tmp_attrs_a = torch.tensor([test_loader_a[0].dataset[k][1]], dtype=torch.int).cuda(config['cuda_device'])
+                        
                         styles = torch.randn(tmp_images_a.shape[0], config['gen']['style_dim'], 1, 1).cuda(config['cuda_device'])
-                        tmp_res_imges_a2b = trainer.sample(x_a=tmp_images_a, x_b=None, s_a=styles, s_b=styles)
+                        
+                        tmp_res_imges_a2b = trainer.sample(x_a=tmp_images_a, x_b=None, attrs_a=tmp_attrs_a, s_a=styles, s_b=styles)
                         tmp_res_imges_a2b = tmp_res_imges_a2b[2][c_ind].unsqueeze(0)
                         for tmp_res_imges_a2b_t in tmp_res_imges_a2b:
                             vutils.save_image(tmp_res_imges_a2b_t, tmp_path_im_a2b + '/' + str(ind_a2b) + '.jpg')
@@ -237,8 +251,8 @@ try:
             # Write images
             if (iterations + 1) % config['image_save_iter'] == 0:
                 with torch.no_grad():
-                    test_image_outputs = trainer.sample(test_display_images_a, test_display_images_b)
-                    train_image_outputs = trainer.sample(train_display_images_a, train_display_images_b)
+                    test_image_outputs = trainer.sample(test_display_images_a, test_display_images_b, test_display_attrs_a, test_display_attrs_b, iterations)
+                    train_image_outputs = trainer.sample(train_display_images_a, train_display_images_b, train_display_attrs_a, train_display_attrs_b, iterations)
                 test_gen_a2b_im, test_gen_b2a_im = write_2images(test_image_outputs,
                                                                  display_size * config['council']['council_size'],
                                                                  image_directory, 'test_%08d' % (iterations + 1), do_a2b=config['do_a2b'], do_b2a=config['do_b2a'])
@@ -257,7 +271,7 @@ try:
 
             if (iterations + 1) % config['image_display_iter'] == 0:
                 with torch.no_grad():
-                    image_outputs = trainer.sample(train_display_images_a, train_display_images_b)
+                    image_outputs = trainer.sample(train_display_images_a, train_display_images_b, train_display_attrs_a, train_display_attrs_b, iterations)
 
                 write_2images(image_outputs, display_size * config['council']['council_size'], image_directory,
                               'train_current', do_a2b=config['do_a2b'], do_b2a=config['do_b2a'])
